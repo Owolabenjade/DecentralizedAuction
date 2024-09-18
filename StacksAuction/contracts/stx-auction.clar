@@ -12,6 +12,8 @@
 (define-constant ERR-INVALID-DURATION (err u108))
 (define-constant ERR-RESERVE-NOT-MET (err u109))
 (define-constant ERR-AUCTION-IN-PROGRESS (err u110))
+(define-constant ERR-INVALID-NAME-LENGTH (err u111))
+(define-constant ERR-INVALID-RESERVE-PRICE (err u112))
 
 ;; Define the data for the auction
 (define-data-var top-bid uint u0)
@@ -28,9 +30,18 @@
 ;; Function to start the auction
 (define-public (initialize-auction (duration uint) (name (string-ascii 50)) (min-price uint))
   (begin
+    ;; Check that the sender is authorized
     (asserts! (is-eq tx-sender (var-get owner)) ERR-NOT-AUTHORIZED)
+    ;; Check that the auction hasn't started yet
     (asserts! (is-eq (var-get auction-start-block) u0) ERR-AUCTION-ALREADY-STARTED)
+    ;; Check that the duration is valid
     (asserts! (> duration u0) ERR-INVALID-DURATION)
+    ;; Check that the item name is not empty and is within the 50-character limit
+    (asserts! (> (len name) u0) ERR-INVALID-NAME-LENGTH)
+    (asserts! (<= (len name) u50) ERR-INVALID-NAME-LENGTH)
+    ;; Check that the minimum price is positive
+    (asserts! (> min-price u0) ERR-INVALID-RESERVE-PRICE)
+    ;; Initialize auction variables
     (var-set auction-start-block block-height)
     (var-set auction-end-block (+ block-height duration))
     (var-set item-name name)
@@ -44,9 +55,13 @@
     (min-valid-bid (if (> current-offer (var-get reserve-price))
                        (+ current-offer BID-STEP)
                        (var-get reserve-price))))
+    ;; Ensure auction has started
     (asserts! (> (var-get auction-start-block) u0) ERR-AUCTION-NOT-STARTED)
+    ;; Ensure auction hasn't ended
     (asserts! (< block-height (var-get auction-end-block)) ERR-AUCTION-ENDED)
+    ;; Ensure bid is valid
     (asserts! (>= offer min-valid-bid) ERR-BID-TOO-LOW)
+    ;; Transfer the bid and update top-bidder
     (match (stx-transfer? offer tx-sender (as-contract tx-sender))
       success
         (match (var-get top-bidder)
@@ -65,9 +80,13 @@
 ;; Function to end the auction and transfer funds to the owner
 (define-public (conclude-auction)
   (begin
+    ;; Ensure auction has ended
     (asserts! (>= block-height (var-get auction-end-block)) ERR-AUCTION-NOT-ENDED)
+    ;; Ensure there's a valid bid
     (asserts! (is-some (var-get top-bidder)) ERR-NO-BIDS)
+    ;; Ensure reserve price is met
     (asserts! (>= (var-get top-bid) (var-get reserve-price)) ERR-RESERVE-NOT-MET)
+    ;; Transfer funds to the owner
     (match (var-get top-bidder)
       auction-winner
         (as-contract (stx-transfer? (var-get top-bid) (as-contract tx-sender) (var-get owner)))
@@ -76,8 +95,11 @@
 ;; Function to cancel the auction (only by owner, only if no bids)
 (define-public (cancel-auction)
   (begin
+    ;; Check if sender is owner
     (asserts! (is-eq tx-sender (var-get owner)) ERR-NOT-AUTHORIZED)
+    ;; Check that no bids have been placed
     (asserts! (is-none (var-get top-bidder)) ERR-AUCTION-IN-PROGRESS)
+    ;; Reset auction data
     (var-set auction-start-block u0)
     (var-set auction-end-block u0)
     (var-set top-bid u0)
