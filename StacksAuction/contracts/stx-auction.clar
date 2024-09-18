@@ -9,6 +9,9 @@
 (define-constant ERR-TRANSFER-FAILED (err u105))
 (define-constant ERR-AUCTION-NOT-ENDED (err u106))
 (define-constant ERR-NO-BIDS (err u107))
+(define-constant ERR-INVALID-DURATION (err u108))
+(define-constant ERR-RESERVE-NOT-MET (err u109))
+(define-constant ERR-AUCTION-IN-PROGRESS (err u110))
 
 ;; Define the data for the auction
 (define-data-var top-bid uint u0)
@@ -27,7 +30,7 @@
   (begin
     (asserts! (is-eq tx-sender (var-get owner)) ERR-NOT-AUTHORIZED)
     (asserts! (is-eq (var-get auction-start-block) u0) ERR-AUCTION-ALREADY-STARTED)
-    (asserts! (> duration u0) (err u108))
+    (asserts! (> duration u0) ERR-INVALID-DURATION)
     (var-set auction-start-block block-height)
     (var-set auction-end-block (+ block-height duration))
     (var-set item-name name)
@@ -46,23 +49,17 @@
     (asserts! (>= offer min-valid-bid) ERR-BID-TOO-LOW)
     (match (stx-transfer? offer tx-sender (as-contract tx-sender))
       success
-        (begin
-          (match (var-get top-bidder)
-            previous-leader 
-              (match (as-contract (stx-transfer? current-offer (as-contract tx-sender) previous-leader))
-                refund-success (begin
-                  (var-set top-bid offer)
-                  (var-set top-bidder (some tx-sender))
-                  (ok true))
-                refund-error (begin
-                  (unwrap-panic (as-contract (stx-transfer? offer (as-contract tx-sender) tx-sender)))
-                  ERR-TRANSFER-FAILED))
-            )
+        (match (var-get top-bidder)
+          previous-leader 
             (begin
+              (try! (as-contract (stx-transfer? current-offer (as-contract tx-sender) previous-leader)))
               (var-set top-bid offer)
               (var-set top-bidder (some tx-sender))
-              (ok true)))
-        )
+              (ok true))
+          (begin
+            (var-set top-bid offer)
+            (var-set top-bidder (some tx-sender))
+            (ok true)))
       error ERR-TRANSFER-FAILED)))
 
 ;; Function to end the auction and transfer funds to the owner
@@ -70,19 +67,17 @@
   (begin
     (asserts! (>= block-height (var-get auction-end-block)) ERR-AUCTION-NOT-ENDED)
     (asserts! (is-some (var-get top-bidder)) ERR-NO-BIDS)
-    (asserts! (>= (var-get top-bid) (var-get reserve-price)) (err u109))
+    (asserts! (>= (var-get top-bid) (var-get reserve-price)) ERR-RESERVE-NOT-MET)
     (match (var-get top-bidder)
       auction-winner
-        (match (as-contract (stx-transfer? (var-get top-bid) (as-contract tx-sender) (var-get owner)))
-          transfer-success (ok true)
-          transfer-error ERR-TRANSFER-FAILED)
+        (as-contract (stx-transfer? (var-get top-bid) (as-contract tx-sender) (var-get owner)))
       ERR-NO-BIDS)))
 
 ;; Function to cancel the auction (only by owner, only if no bids)
 (define-public (cancel-auction)
   (begin
     (asserts! (is-eq tx-sender (var-get owner)) ERR-NOT-AUTHORIZED)
-    (asserts! (is-none (var-get top-bidder)) (err u110))
+    (asserts! (is-none (var-get top-bidder)) ERR-AUCTION-IN-PROGRESS)
     (var-set auction-start-block u0)
     (var-set auction-end-block u0)
     (var-set top-bid u0)
